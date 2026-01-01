@@ -67,6 +67,8 @@ function ChatApp({ authUser }) {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const chatsPollingRef = useRef(null)
   const messagePollingRef = useRef(null)
+  const [lastActivity, setLastActivity] = useState(Date.now())
+  const [isTabVisible, setIsTabVisible] = useState(true)
 
   // Load from localStorage and server on mount
   useEffect(() => {
@@ -144,16 +146,66 @@ function ChatApp({ authUser }) {
     }
   }
 
+  // Page Visibility API listener
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      setIsTabVisible(!document.hidden)
+    }
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange)
+  }, [])
+
+  // Activity tracking
+  useEffect(() => {
+    const updateActivity = () => {
+      setLastActivity(Date.now())
+    }
+
+    window.addEventListener('mousemove', updateActivity)
+    window.addEventListener('keydown', updateActivity)
+    window.addEventListener('scroll', updateActivity)
+    window.addEventListener('click', updateActivity)
+
+    return () => {
+      window.removeEventListener('mousemove', updateActivity)
+      window.removeEventListener('keydown', updateActivity)
+      window.removeEventListener('scroll', updateActivity)
+      window.removeEventListener('click', updateActivity)
+    }
+  }, [])
+
+  // Smart polling interval calculator
+  const getPollingInterval = () => {
+    if (!isTabVisible) return 30000 // 30s when tab not visible
+
+    const timeSinceActivity = Date.now() - lastActivity
+
+    if (timeSinceActivity < 5000) return 1500   // 1.5s when very active
+    if (timeSinceActivity < 30000) return 3000  // 3s when recently active
+    return 10000                                 // 10s when idle
+  }
+
   useEffect(() => {
     fetchChats()
-    if (chatsPollingRef.current) clearInterval(chatsPollingRef.current)
-    chatsPollingRef.current = setInterval(fetchChats, 3000)
-    return () => { if (chatsPollingRef.current) clearInterval(chatsPollingRef.current) }
-  }, [])
+
+    const pollChats = () => {
+      const interval = getPollingInterval()
+      chatsPollingRef.current = setTimeout(() => {
+        fetchChats()
+        pollChats() // Re-schedule with new interval
+      }, interval)
+    }
+
+    pollChats()
+
+    return () => {
+      if (chatsPollingRef.current) clearTimeout(chatsPollingRef.current)
+    }
+  }, [isTabVisible, lastActivity])
 
   const stopMessagePolling = () => {
     if (messagePollingRef.current) {
-      clearInterval(messagePollingRef.current)
+      clearTimeout(messagePollingRef.current)
       messagePollingRef.current = null
     }
   }
@@ -193,9 +245,16 @@ function ChatApp({ authUser }) {
 
   const startMessagePolling = (chatId) => {
     stopMessagePolling()
-    messagePollingRef.current = setInterval(() => {
-      if (chatId) fetchMessagesUpdate(chatId)
-    }, 3000)
+
+    const pollMessages = () => {
+      if (chatId) {
+        fetchMessagesUpdate(chatId)
+        const interval = getPollingInterval()
+        messagePollingRef.current = setTimeout(pollMessages, interval)
+      }
+    }
+
+    pollMessages()
   }
 
   const selectChat = async (chatId) => {
@@ -438,7 +497,18 @@ function ChatApp({ authUser }) {
               })()}
             </div>
             <div className="chat-header-info">
-              <div className="chat-header-name">{chatsData[currentChatId]?.user_name || 'User'}</div>
+              <div className="chat-header-name">
+                {chatsData[currentChatId]?.user_name || 'User'}
+                <div className="live-indicator" style={{
+                  display: 'inline-block',
+                  width: '8px',
+                  height: '8px',
+                  borderRadius: '50%',
+                  backgroundColor: isTabVisible ? '#25d366' : '#8696a0',
+                  marginLeft: '8px',
+                  animation: isTabVisible ? 'pulse 2s infinite' : 'none'
+                }} />
+              </div>
             </div>
           </div>
         ) : null}
